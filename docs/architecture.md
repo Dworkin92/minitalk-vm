@@ -5,47 +5,51 @@
 
 ## 1. Objectifs
 
-| Caractéristique | Statut v0.1 |
-|---|---|
-| Instructions **fixes**, taille déterministe | ✅ 16 octets |
-| Pages mémoire de **16 Mo** | ✅ |
-| **32 registres universels** | ✅ |
-| Value 64 bits avec **NaN-boxing** | ⬜ à faire (`int64_t` brut pour l'instant) |
-| Objets alloués dans le **heap** | ✅ (chunks dans des pages) |
-| **Constant pool** | ⬜ zone réservée (`constant_zone`), pas d'opcode |
-| VM à registres inspirée de **Lua** | ✅ noyau de base |
-| **GC mark-and-sweep** | ✅ phase mark + sweep (libération réelle ⬜) |
+
+| Caractéristique                             | Statut v0.1                                     |
+| ------------------------------------------- | ----------------------------------------------- |
+| Instructions **fixes**, taille déterministe | ✅ 16 octets                                     |
+| Pages mémoire de **16 Mo**                  | ✅                                               |
+| **32 registres universels**                 | ✅                                               |
+| Value 64 bits avec **NaN-boxing**           | ⬜ à faire (`int64_t` brut pour l'instant)       |
+| Objets alloués dans le **heap**             | ✅ (chunks dans des pages)                       |
+| **Constant pool**                           | ⬜ zone réservée (`constant_zone`), pas d'opcode |
+| VM à registres inspirée de **Lua**          | ✅ noyau de base                                 |
+| **GC mark-and-sweep**                       | ✅ phase mark + sweep (libération réelle ⬜)      |
+
 
 ## 2. Vue d'ensemble
 
 ```
-┌──────────────────────────── VM ──────────────────────────────────┐
-│  registers[32]   ip   code_object ──► CodeObject (code_zone)     │
-│                                    └─► Instruction[] (code_zone) │
-└──────────────────────────┬───────────────────────────────────────┘
+┌──────────────────────────── VM ────────────────-───────----─────┐
+│  registers[32]   ip   code_object ──► CodeObject (code_zone)    │
+│                                    └─► Instruction[] (code_zone)│
+└──────────────────────────┬───────────────────────────-----──────┘
                            │
-                    ┌──────▼───────┐
+                    ┌──────▼───-───┐
                     │    Heap      │
-                    ├──────────────┤
+                    ├──────────-───┤
                     │ object_zone  │  objets dynamiques (strings, arrays…)
                     │ constant_zone│ constantes (réservée)
                     │ code_zone    │  CodeObject + bytecode
-                    └──────┬───────┘
+                    └──────┬────-──┘
               chaque zone : pages[1024] → MemoryPage (16 Mo)
               chaque page : chunks contigus [ChunkHeader | données]
 ```
 
 ## 3. Fichiers
 
-| Fichier | Rôle |
-|---|---|
-| `types.h` | `Value`, `Instruction` (16 o), opcodes (`#define`) |
+
+| Fichier      | Rôle                                                        |
+| ------------ | ----------------------------------------------------------- |
+| `types.h`    | `Value`, `Instruction` (16 o), opcodes (`#define`)          |
 | `memory.h/c` | Heap, zones, pages, chunks, `heap_alloc`, `heap_is_ptr`, GC |
-| `vm.h/c` | Structure `VM`, boucle d'exécution |
-| `loader.h/c` | Chargement du bytecode en `CodeObject` (dans le heap) |
-| `utils.h` | Macros `INST_*`, `CHECK` |
-| `test.c` | 10 tests (`run_all_tests()`, appelé par `main`) |
-| `main.c` | Seul point d'entrée |
+| `vm.h/c`     | Structure `VM`, boucle d'exécution                          |
+| `loader.h/c` | Chargement du bytecode en `CodeObject` (dans le heap)       |
+| `utils.h`    | Macros `INST_*`, `CHECK`                                    |
+| `test.c`     | 10 tests (`run_all_tests()`, appelé par `main`)             |
+| `main.c`     | Seul point d'entrée                                         |
+
 
 Compilation : `gcc -std=c99 -Wall -Wextra -O0 -o vm src/*.c`
 
@@ -63,6 +67,7 @@ typedef struct {
 ```
 
 **Invariants** :
+
 - `size` est **totale** : le chunk suivant est à `(uint8_t*)h + h->size` (toujours aligné 8).
 - Les tailles demandées sont arrondies à 8 octets par `heap_alloc`.
 - Un pointeur de données est toujours `header + 1`.
@@ -80,22 +85,25 @@ typedef struct {
 ```
 
 **Décisions** :
+
 - Les opcodes sont des **`#define`** (0–7), pas un `enum` : un `enum` vaut `int` (4 o) chez la plupart des compilateurs et gonflait la structure de façon imprévisible.
 - `immediate` en tête : une struct contenant un `int64_t` est arrondie au multiple de 8 supérieur ; les 4 octets restants sont explicités (`flags` + `pad`) pour être **déterministe**.
 - Les programmes sont écrits avec des **initializers désignés C99** (`{ .opcode = OP_ADD, .reg1 = 3, ... }`) : l'ordre des champs n'importe plus.
 
 ### 4.3 Opcodes (v0.1)
 
-| Opcode | Valeur | Sémantique |
-|---|---|---|
-| `OP_HALT` | 0 | fin d'exécution |
-| `OP_LOAD` | 1 | `R[reg1] = immediate` |
-| `OP_ADD` | 2 | `R[reg1] = R[reg2] + R[reg3]` |
-| `OP_SUB` | 3 | `R[reg1] = R[reg2] - R[reg3]` |
-| `OP_MUL` | 4 | `R[reg1] = R[reg2] * R[reg3]` |
-| `OP_JUMP` | 5 | `ip = immediate` |
-| `OP_JUMP_IF` | 6 | `si R[reg1] == 0 alors ip = immediate` |
-| `OP_PRINT` | 7 | affiche `R[reg1]` |
+
+| Opcode       | Valeur | Sémantique                             |
+| ------------ | ------ | -------------------------------------- |
+| `OP_HALT`    | 0      | fin d'exécution                        |
+| `OP_LOAD`    | 1      | `R[reg1] = immediate`                  |
+| `OP_ADD`     | 2      | `R[reg1] = R[reg2] + R[reg3]`          |
+| `OP_SUB`     | 3      | `R[reg1] = R[reg2] - R[reg3]`          |
+| `OP_MUL`     | 4      | `R[reg1] = R[reg2] * R[reg3]`          |
+| `OP_JUMP`    | 5      | `ip = immediate`                       |
+| `OP_JUMP_IF` | 6      | `si R[reg1] == 0 alors ip = immediate` |
+| `OP_PRINT`   | 7      | affiche `R[reg1]`                      |
+
 
 ### 4.4 Types d'objets (`ObjectType`, 1 octet)
 
@@ -132,6 +140,7 @@ Chaque zone est un **tableau de 1024 pointeurs de pages** (`pages[1024]`), allou
 ## 6. Bytecode comme objet
 
 Le bytecode vit **entièrement dans le heap** (`code_zone`) :
+
 - un chunk `CodeObject` (métadonnées) ;
 - un chunk pour le tableau d'instructions.
 
@@ -139,15 +148,24 @@ Aucun `malloc` hors heap pour le code : libération unique via `heap_free()`. La
 
 ## 7. Décisions d'architecture consignées
 
-| # | Décision | Motif |
-|---|---|---|
-| D1 | Opcodes en `#define`, `opcode: uint8_t` | taille déterministe de `Instruction` |
-| D2 | `Instruction` = 16 o explicites (`flags` + `pad`) | struct avec `int64_t` ⇒ multiple de 8 inévitable ; autant l'expliciter |
-| D3 | `ChunkHeader.size` = taille **totale** | parcours GC trivial, pas de recalcul |
-| D4 | Tableau de pages plutôt que liste chaînée | O(1), borné (1024), adapté au sweep |
-| D5 | `heap_is_ptr` garde-fou du GC | protège contre entiers bruts tant que pas de NaN-boxing |
-| D6 | Rejet `NULL` des allocations > page | un objet plus grand qu'une page est une erreur (pas de multi-pages en v0.x) |
-| D7 | Bytecode = objets dans `code_zone` | cohérence "tout est objet", métadonnées futures, libération unique |
+
+| #   | Décision                                                                                        | Motif                                                                                                                                                                                                                |
+| --- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D1  | Opcodes en `#define`, `opcode: uint8_t`                                                         | taille déterministe de `Instruction`                                                                                                                                                                                 |
+| D2  | `Instruction` = 16 o explicites (`flags` + `pad`)                                               | struct avec `int64_t` ⇒ multiple de 8 inévitable ; autant l'expliciter                                                                                                                                               |
+| D3  | `ChunkHeader.size` = taille **totale**                                                          | parcours GC trivial, pas de recalcul                                                                                                                                                                                 |
+| D4  | Tableau de pages plutôt que liste chaînée                                                       | O(1), borné (1024), adapté au sweep                                                                                                                                                                                  |
+| D5  | `heap_is_ptr` garde-fou du GC                                                                   | protège contre entiers bruts tant que pas de NaN-boxing                                                                                                                                                              |
+| D6  | Rejet `NULL` des allocations &gt; page                                                          | un objet plus grand qu'une page est une erreur (pas de multi-pages en v0.x)                                                                                                                                          |
+| D7  | Bytecode = objets dans `code_zone`                                                              | cohérence "tout est objet", métadonnées futures, libération unique                                                                                                                                                   |
+| D8  | **(décidée le 28/10/2026, non encore implémentée)** Fenêtre de registres à la Lua + CALL/RETURN | chaque fonction reçoit sa propre fenêtre de slots dans une pile d'exécution unique ; allocation de registres triviale (pile LIFO de slots, pas de coloration) ; fusionne le chantier CALL/RETURN + frames. Voir §10. |
+
+
+**Notes sur D8** :
+
+- Les `reg1..reg3` de l'instruction 16 octets actuelle gardent leur format ; leur **sémantique** devient « offset relatif à `base` » (offsets 0..15 adressent la fenêtre).
+- Réduction convenue : **16 slots** par fenêtre (registre = 4 bits, un demi-octet) pour le futur encodage compact 64 bits, avec **échappatoire** `LOAD_EXT`/`STORE_EXT` (offset 16 bits) au-delà de 16 slots.
+- Les 32 registres universels actuels (D2 sémantique) disparaîtront au profit de la pile ; `pc`, `base`, `top`, `stack_limit` vivent dans la structure `VM`, jamais dans les slots.
 
 ## 8. Limitations connues (v0.1)
 
@@ -162,5 +180,41 @@ Aucun `malloc` hors heap pour le code : libération unique via `heap_free()`. La
 1. **NaN-boxing** (`value.h`) : remplace D5 par un test de tag, prépare le dispatch typé.
 2. **Free-list** : sweep qui rend réellement la mémoire.
 3. **Constant pool + `LOAD_CONST`** (`constant_zone` déjà là).
-4. **`CALL`/`RETURN`** + pile de frames.
+4. **Fenêtre de registres (D8) + `CALL`/`RETURN`** : pile d'exécution, frames, `base`/`top`/`stack_limit` dans la VM, racines GC = pile. Ordre conseillé : d'abord avec l'instruction 16 octets actuelle, l'encodage compact ensuite.
 5. **`NEW_ARRAY`, `GET_FIELD`, `SET_FIELD`** et objets du langage.
+
+## 10. D8 — Fenêtre de registres (spécification à implémenter)
+
+Modèle hybride pile/registres inspiré de Lua 5 : une **pile physique unique** de `Value`, découpée en fenêtres par appel de fonction.
+
+**État VM** (jamais dans les slots) :
+
+```c
+typedef struct VM {
+    Instruction* pc;       // compteur de programme (pointe dans code_zone)
+    Value* stack;          // pile physique (grand tableau de Value)
+    Value* base;           // debut de la fenetre de la frame courante
+    Value* top;            // sommet des donnees utiles
+    Value* stack_limit;    // garde de debordement
+    Heap* heap;
+} VM;
+```
+
+**Convention d'appel** :
+
+- `CALL` : les *k* premiers slots de la fenêtre du callee = arguments ; vérification `base + max_stacksize(callee) < stack_limit` (sinon croissance de la pile).
+- `RETURN` : valeur de retour déplacée, base restaurée, fenêtre recyclée.
+- Slots = **données uniquement** (jamais de plomberie : la pile est déplaçable si elle grandit, et le GC ne doit jamais parser d'état interne).
+- La frontière args / locaux / temporaires est une **convention du compilateur**, invisible pour la VM.
+
+**Adressage** :
+
+- Instructions normales : opérandes sur **4 bits** → slots 0–15 de la fenêtre (le cas courant).
+- Au-delà de 15 : instructions étendues `LOAD_EXT`/`STORE_EXT` (offset 16 bits), émises par le compilateur si `max_stacksize > 16`.
+- Le compilateur alloue les slots en pile LIFO (`next_slot++` / `--`) ; `max_stacksize` enregistré par prototype. Aucune analyse de durée de vie.
+
+**Encodage compact 64 bits visé** (révision future de D2, après validation de la fenêtre) :
+
+```
+| immediate : 40 bits | flags : 4 | reg3 : 4 | reg2 : 4 | reg1 : 4 | opcode : 8 |
+```
