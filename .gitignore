@@ -1,0 +1,18 @@
+# Binaires et objets
+bin/
+obj/
+
+# Sorties de compilation à la racine
+vm
+vm.exe
+*.o
+*.obj
+
+# Code::Blocks
+*.depend
+*.layout
+*.cbp.bak
+
+# Système
+Thumbs.db
+.DS_Store
