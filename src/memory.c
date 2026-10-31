@@ -57,7 +57,7 @@ void* heap_alloc(Heap* heap, MemoryZone* zone, size_t size, ObjectType type) {
     if (total > PAGE_SIZE) {
         fprintf(stderr, "heap: allocation de %zu octets > page (%d)\n",
                 size, (int)PAGE_SIZE);
-        return NULL;   // CORRECTIF : avant, on debordait de la page !
+        return NULL;
     }
 
     for (uint32_t i = 0; i < zone->page_count; i++) {
@@ -95,9 +95,6 @@ void heap_free(Heap* heap) {
 }
 
 // ---- heap_is_ptr : le garde-fou du GC ----
-// Parcourt les chunks de toutes les pages et verifie que ptr pointe
-// dans la zone de DONNEES d'un chunk (pas dans un header, pas ailleurs).
-// C'est ce qui evite au GC de dereferencer un entier brut (ex: 100).
 
 static bool zone_contains(const MemoryZone* zone, const void* ptr) {
     for (uint32_t i = 0; i < zone->page_count; i++) {
@@ -127,25 +124,17 @@ bool heap_is_ptr(const Heap* heap, const void* ptr) {
 
 void gc_mark(Heap* heap, void* ptr) {
     if (ptr == NULL) return;
-
-    // CORRECTIF CRITIQUE : si ce n'est pas un pointeur du heap
-    // (ex: un entier stocke dans un array), on ne le suit PAS.
-    // Avant : gc_mark((void*)100) -> access violation 0xC0000005.
     if (!heap_is_ptr(heap, ptr)) return;
 
     ChunkHeader* h = (ChunkHeader*)ptr - 1;
     if (h->marked) return;
     h->marked = 1;
 
-    // Enfants : seuls les arrays contiennent des references pour l'instant.
-    // Chaque element est une Value ; on ne suit que les vrais pointeurs.
     if (h->type == OBJ_ARRAY) {
         ArrayObject* arr = (ArrayObject*)ptr;
         for (int64_t i = 0; i < arr->length; i++) {
-            if (heap_is_ptr(heap, arr->elements))   // elements est un pointeur
-                gc_mark(heap, arr->elements);        // le chunk elements lui-meme
-            // Remarque : quand le NaN-boxing sera en place, on marquera
-            // element par element selon le tag de chaque valeur.
+            if (heap_is_ptr(heap, arr->elements))
+                gc_mark(heap, arr->elements);
         }
     }
 }
@@ -163,8 +152,7 @@ void gc_sweep(Heap* heap) {
             MemoryPage* page = zone->pages[i];
             ChunkHeader* h = (ChunkHeader*)page->start;
             while ((uint8_t*)h < page->free_ptr) {
-                if (h->marked) h->marked = 0;  // remet a zero pour le prochain GC
-                // (le sweep "vrai" liberera ici via une free-list plus tard)
+                if (h->marked) h->marked = 0;
                 h = (ChunkHeader*)((uint8_t*)h + h->size);
             }
         }

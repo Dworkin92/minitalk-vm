@@ -21,11 +21,55 @@ static int tests_run = 0;
 // 1. Tailles deterministes des structures
 static void test_struct_sizes(void) {
     CHECK(sizeof(ChunkHeader) == 8,  "sizeof(ChunkHeader) != 8");
-    CHECK(sizeof(Instruction) == 16, "sizeof(Instruction) != 16");
+    CHECK(sizeof(Instruction) == 8,  "sizeof(Instruction) != 8 (v0.2)");
     CHECK(sizeof(ArrayObject) == 16, "sizeof(ArrayObject) != 16");
 }
 
-// 2. En-tete de chunk correct apres allocation
+// 2. Round-trip encodage/decodage de l'instruction compacte (NOUVEAU v0.2)
+static void test_instruction_encoding(void) {
+    // Champs isoles
+    Instruction w = ins_encode(OP_LOAD, 3, 15, 14, 13, 42);
+    CHECK(INS_OPCODE(w) == OP_LOAD, "opcode mal encode");
+    CHECK(INS_REG1(w) == 3,   "reg1 mal encode");
+    CHECK(INS_REG2(w) == 15,  "reg2 mal encode");
+    CHECK(INS_REG3(w) == 14,  "reg3 mal encode");
+    CHECK(INS_FLAGS(w) == 13, "flags mal encodes");
+    CHECK(INS_IMM(w) == 42,   "immediate mal encode");
+
+    // Immediate negatif : extension de signe 40 bits
+    w = INST_LOAD(1, -12345);
+    CHECK(INS_IMM(w) == -12345, "immediate negatif mal decode");
+
+    // Bornes de l'immediate 40 bits
+    w = INST_LOAD(1, INS_IMM_MIN);
+    CHECK(INS_IMM(w) == INS_IMM_MIN, "borne basse mal decodee");
+    w = INST_LOAD(1, INS_IMM_MAX);
+    CHECK(INS_IMM(w) == INS_IMM_MAX, "borne haute mal decodee");
+
+    // Macros et decodage coherents sur chaque opcode
+    Instruction prog[] = {
+        INST_LOAD(1, 10),
+        INST_ADD(3, 1, 2),
+        INST_SUB(3, 3, 1),
+        INST_MUL(3, 3, 2),
+        INST_JUMP(0),
+        INST_JUMP_IF(4, 9),
+        INST_PRINT(3),
+        INST_HALT
+    };
+    CHECK(INS_OPCODE(prog[0]) == OP_LOAD,    "macro LOAD incorrecte");
+    CHECK(INS_REG1(prog[0]) == 1,            "macro LOAD : mauvais reg1");
+    CHECK(INS_IMM(prog[0]) == 10,            "macro LOAD : mauvais immediate");
+    CHECK(INS_OPCODE(prog[1]) == OP_ADD,     "macro ADD incorrecte");
+    CHECK(INS_REG2(prog[1]) == 1 && INS_REG3(prog[1]) == 2, "macro ADD : mauvais regs");
+    CHECK(INS_OPCODE(prog[4]) == OP_JUMP && INS_IMM(prog[4]) == 0, "macro JUMP incorrecte");
+    CHECK(INS_OPCODE(prog[5]) == OP_JUMP_IF && INS_REG1(prog[5]) == 4
+          && INS_IMM(prog[5]) == 9, "macro JUMP_IF incorrecte");
+    CHECK(INS_OPCODE(prog[6]) == OP_PRINT,   "macro PRINT incorrecte");
+    CHECK(INS_OPCODE(prog[7]) == OP_HALT,    "macro HALT incorrecte");
+}
+
+// 3. En-tete de chunk correct apres allocation
 static void test_chunk_header(void) {
     Heap* heap = heap_init();
     char* str = heap_alloc(heap, &heap->object_zone, 10, OBJ_STRING);
@@ -38,7 +82,7 @@ static void test_chunk_header(void) {
     heap_free(heap);
 }
 
-// 3. Deux allocations distinctes, donnees intactes
+// 4. Deux allocations distinctes, donnees intactes
 static void test_multiple_allocations(void) {
     Heap* heap = heap_init();
     char* a = heap_alloc(heap, &heap->object_zone, 10, OBJ_STRING);
@@ -51,27 +95,26 @@ static void test_multiple_allocations(void) {
     heap_free(heap);
 }
 
-// 4. Allocation plus grande qu'une page -> doit echouer proprement
+// 5. Allocation plus grande qu'une page -> doit echouer proprement
 static void test_oversized_allocation(void) {
     Heap* heap = heap_init();
     void* too_big = heap_alloc(heap, &heap->object_zone,
-                               (size_t)PAGE_SIZE, OBJ_OBJECT); // 16 Mo + header
+                               (size_t)PAGE_SIZE, OBJ_OBJECT);
     CHECK(too_big == NULL, "une allocation > page doit retourner NULL");
     void* ok = heap_alloc(heap, &heap->object_zone, 1024, OBJ_OBJECT);
     CHECK(ok != NULL, "une allocation normale doit reussir");
     heap_free(heap);
 }
 
-// 5. Deuxieme page allouee quand la premiere est PLEINE
+// 6. Deuxieme page allouee quand la premiere est PLEINE
 static void test_page_growth(void) {
     Heap* heap = heap_init();
     CHECK(heap->object_zone.page_count == 0, "zone doit demarrer sans page");
     heap_alloc(heap, &heap->object_zone, 100, OBJ_OBJECT);
     CHECK(heap->object_zone.page_count == 1, "1 page attendue");
 
-    // Remplit exactement le reste de la page 1
     MemoryPage* p1 = heap->object_zone.pages[0];
-    size_t rest = (size_t)(p1->end - p1->free_ptr);   // espace restant
+    size_t rest = (size_t)(p1->end - p1->free_ptr);
     void* big = heap_alloc(heap, &heap->object_zone,
                            rest - sizeof(ChunkHeader), OBJ_OBJECT);
     CHECK(big != NULL, "remplissage de page echoue");
@@ -83,8 +126,7 @@ static void test_page_growth(void) {
     heap_free(heap);
 }
 
-// 6. GC : un entier brut dans un array ne doit PAS faire planter le mark
-//    (c'etait la cause du 0xC0000005)
+// 7. GC : un entier brut dans un array ne doit PAS faire planter le mark
 static void test_gc_with_raw_ints(void) {
     Heap* heap = heap_init();
     ArrayObject* arr = heap_alloc(heap, &heap->object_zone,
@@ -96,7 +138,7 @@ static void test_gc_with_raw_ints(void) {
     arr->elements[1] = 200;
 
     void* roots[] = { arr };
-    gc_collect(heap, roots, 1);   // avant : crash ici
+    gc_collect(heap, roots, 1);
 
     ChunkHeader* arr_h = (ChunkHeader*)arr - 1;
     ChunkHeader* el_h  = (ChunkHeader*)arr->elements - 1;
@@ -105,7 +147,7 @@ static void test_gc_with_raw_ints(void) {
     heap_free(heap);
 }
 
-// 7. GC : les objets racine sont bien marques pendant la phase de mark
+// 8. GC : les objets racine sont bien marques pendant la phase de mark
 static void test_gc_marks_reachable(void) {
     Heap* heap = heap_init();
     char* root = heap_alloc(heap, &heap->object_zone, 10, OBJ_STRING);
@@ -122,7 +164,7 @@ static void test_gc_marks_reachable(void) {
     heap_free(heap);
 }
 
-// 8. heap_is_ptr distingue pointeur du heap et entier
+// 9. heap_is_ptr distingue pointeur du heap et entier
 static void test_heap_is_ptr(void) {
     Heap* heap = heap_init();
     char* p = heap_alloc(heap, &heap->object_zone, 10, OBJ_STRING);
@@ -132,7 +174,7 @@ static void test_heap_is_ptr(void) {
     heap_free(heap);
 }
 
-// 9. Bytecode charge comme objet dans code_zone, executable
+// 10. Bytecode charge comme objet dans code_zone, executable
 static void test_bytecode_as_object(void) {
     VM* vm = vm_new();
     Instruction program[] = {
@@ -155,7 +197,8 @@ static void test_bytecode_as_object(void) {
     vm_free(vm);
 }
 
-// 10. Boucle : somme 0+1+...+5 = 15 via JUMP / JUMP_IF
+// 11. Boucle : somme 0+1+...+5 = 15 via JUMP / JUMP_IF
+//     (programme identique a la v0.1 : comportement constant)
 static void test_loop_bytecode(void) {
     VM* vm = vm_new();
     Instruction program[] = {
@@ -182,6 +225,7 @@ void run_all_tests(void) {
     printf("sizeof(ChunkHeader) = %zu, sizeof(Instruction) = %zu\n",
            sizeof(ChunkHeader), sizeof(Instruction));
     RUN_TEST(test_struct_sizes);
+    RUN_TEST(test_instruction_encoding);
     RUN_TEST(test_chunk_header);
     RUN_TEST(test_multiple_allocations);
     RUN_TEST(test_oversized_allocation);

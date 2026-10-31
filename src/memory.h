@@ -30,7 +30,7 @@ typedef struct {
 // Objet Code : un bloc de bytecode
 typedef struct {
     size_t        length;   // nombre d'instructions
-    Instruction*  code;     // tableau d'instructions
+    Instruction*  code;     // tableau d'instructions (8 octets chacune)
 } CodeObject;
 
 // En-tete de chunk : toujours 8 octets
@@ -65,8 +65,6 @@ void   heap_free(Heap* heap);
 void*  heap_alloc(Heap* heap, MemoryZone* zone, size_t size, ObjectType type);
 
 // Verifie qu'un pointeur est bien une donnee allouee dans le heap.
-// (Indispensable tant qu'on n'a pas le NaN-boxing pour distinguer
-//  entiers et pointeurs : evite au GC de dereferencer des entiers bruts.)
 bool   heap_is_ptr(const Heap* heap, const void* ptr);
 
 // GC mark-and-sweep

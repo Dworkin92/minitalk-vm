@@ -16,11 +16,12 @@ VM* vm_new(void) {
 }
 
 void vm_free(VM* vm) {
-    // Tout le contenu vit dans le heap : une seule liberation.
     heap_free(vm->heap);
     free(vm);
 }
 
+// v0.2 : l'instruction est un mot de 64 bits, le decodage se fait
+// ici, au moment de l'execution (pas de struct reconstituee).
 void vm_run(VM* vm) {
     if (!vm->code_object) {
         fprintf(stderr, "vm: aucun bytecode charge\n");
@@ -29,37 +30,41 @@ void vm_run(VM* vm) {
     const Instruction* code = vm->code_object->code;
 
     while (vm->ip < vm->code_object->length) {
-        Instruction inst = code[vm->ip++];
-        switch (inst.opcode) {
+        Instruction word = code[vm->ip++];
+        uint8_t reg1 = INS_REG1(word);
+        uint8_t reg2 = INS_REG2(word);
+        uint8_t reg3 = INS_REG3(word);
+
+        switch (INS_OPCODE(word)) {
             case OP_HALT: return;
             case OP_LOAD:
-                vm->registers[inst.reg1] = inst.immediate;
+                vm->registers[reg1] = INS_IMM(word);
                 break;
             case OP_ADD:
-                vm->registers[inst.reg1] =
-                    vm->registers[inst.reg2] + vm->registers[inst.reg3];
+                vm->registers[reg1] =
+                    vm->registers[reg2] + vm->registers[reg3];
                 break;
             case OP_SUB:
-                vm->registers[inst.reg1] =
-                    vm->registers[inst.reg2] - vm->registers[inst.reg3];
+                vm->registers[reg1] =
+                    vm->registers[reg2] - vm->registers[reg3];
                 break;
             case OP_MUL:
-                vm->registers[inst.reg1] =
-                    vm->registers[inst.reg2] * vm->registers[inst.reg3];
+                vm->registers[reg1] =
+                    vm->registers[reg2] * vm->registers[reg3];
                 break;
             case OP_JUMP:
-                vm->ip = (size_t)inst.immediate;
+                vm->ip = (size_t)INS_IMM(word);
                 break;
             case OP_JUMP_IF:   // saute si R[reg1] == 0
-                if (vm->registers[inst.reg1] == 0)
-                    vm->ip = (size_t)inst.immediate;
+                if (vm->registers[reg1] == 0)
+                    vm->ip = (size_t)INS_IMM(word);
                 break;
             case OP_PRINT:
-                printf("R%u = %lld\n", inst.reg1,
-                       (long long)vm->registers[inst.reg1]);
+                printf("R%u = %lld\n", reg1,
+                       (long long)vm->registers[reg1]);
                 break;
             default:
-                fprintf(stderr, "vm: opcode inconnu %u\n", inst.opcode);
+                fprintf(stderr, "vm: opcode inconnu %u\n", INS_OPCODE(word));
                 exit(1);
         }
     }

@@ -11,7 +11,7 @@
 void run_all_tests(void);
 
 int main(void) {
-    printf("== myVM ==\n");
+    printf("== myVM v0.2 (encodage compact 64 bits) ==\n");
     printf("sizeof(ChunkHeader)=%zu  sizeof(Instruction)=%zu\n\n",
            sizeof(ChunkHeader), sizeof(Instruction));
 
