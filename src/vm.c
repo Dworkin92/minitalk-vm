@@ -8,7 +8,7 @@
 VM* vm_new(void) {
     VM* vm = malloc(sizeof(VM));
     if (!vm) { fprintf(stderr, "vm: echec malloc(VM)\n"); exit(1); }
-    for (int i = 0; i < NUM_REGISTERS; i++) vm->registers[i] = 0;
+    for (int i = 0; i < NUM_REGISTERS; i++) vm->registers[i] = VALUE_NIL;
     vm->code_object = NULL;
     vm->ip = 0;
     vm->heap = heap_init();
@@ -20,8 +20,9 @@ void vm_free(VM* vm) {
     free(vm);
 }
 
-// v0.2 : l'instruction est un mot de 64 bits, le decodage se fait
-// ici, au moment de l'execution (pas de struct reconstituee).
+// v0.3 : registres = Value NaN-boxes. Les operations arithmetiques
+// extraient les entiers ; JUMP_IF saute sur nil / false / int 0 ;
+// PRINT affiche selon le type. Programmes v0.2 inchanges.
 void vm_run(VM* vm) {
     if (!vm->code_object) {
         fprintf(stderr, "vm: aucun bytecode charge\n");
@@ -38,30 +39,34 @@ void vm_run(VM* vm) {
         switch (INS_OPCODE(word)) {
             case OP_HALT: return;
             case OP_LOAD:
-                vm->registers[reg1] = INS_IMM(word);
+                vm->registers[reg1] = value_int(INS_IMM(word));
                 break;
             case OP_ADD:
-                vm->registers[reg1] =
-                    vm->registers[reg2] + vm->registers[reg3];
+                vm->registers[reg1] = value_int(
+                    value_as_int(vm->registers[reg2]) +
+                    value_as_int(vm->registers[reg3]));
                 break;
             case OP_SUB:
-                vm->registers[reg1] =
-                    vm->registers[reg2] - vm->registers[reg3];
+                vm->registers[reg1] = value_int(
+                    value_as_int(vm->registers[reg2]) -
+                    value_as_int(vm->registers[reg3]));
                 break;
             case OP_MUL:
-                vm->registers[reg1] =
-                    vm->registers[reg2] * vm->registers[reg3];
+                vm->registers[reg1] = value_int(
+                    value_as_int(vm->registers[reg2]) *
+                    value_as_int(vm->registers[reg3]));
                 break;
             case OP_JUMP:
                 vm->ip = (size_t)INS_IMM(word);
                 break;
-            case OP_JUMP_IF:   // saute si R[reg1] == 0
-                if (vm->registers[reg1] == 0)
+            case OP_JUMP_IF:   // saute si la valeur est "fausse"
+                if (value_is_falsy(vm->registers[reg1]))
                     vm->ip = (size_t)INS_IMM(word);
                 break;
             case OP_PRINT:
-                printf("R%u = %lld\n", reg1,
-                       (long long)vm->registers[reg1]);
+                printf("R%u = ", reg1);
+                value_print(vm->registers[reg1]);
+                printf("\n");
                 break;
             default:
                 fprintf(stderr, "vm: opcode inconnu %u\n", INS_OPCODE(word));

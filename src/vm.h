@@ -8,7 +8,7 @@
 #include "memory.h"
 
 typedef struct VM {
-    Register     registers;
+    Register     registers;    // Value NaN-boxes depuis la v0.3
     CodeObject*  code_object;
     size_t       ip;
     Heap*        heap;

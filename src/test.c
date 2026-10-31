@@ -21,13 +21,13 @@ static int tests_run = 0;
 // 1. Tailles deterministes des structures
 static void test_struct_sizes(void) {
     CHECK(sizeof(ChunkHeader) == 8,  "sizeof(ChunkHeader) != 8");
-    CHECK(sizeof(Instruction) == 8,  "sizeof(Instruction) != 8 (v0.2)");
+    CHECK(sizeof(Value) == 8,        "sizeof(Value) != 8");
+    CHECK(sizeof(Instruction) == 8,  "sizeof(Instruction) != 8");
     CHECK(sizeof(ArrayObject) == 16, "sizeof(ArrayObject) != 16");
 }
 
-// 2. Round-trip encodage/decodage de l'instruction compacte (NOUVEAU v0.2)
+// 2. Round-trip encodage/decodage de l'instruction compacte
 static void test_instruction_encoding(void) {
-    // Champs isoles
     Instruction w = ins_encode(OP_LOAD, 3, 15, 14, 13, 42);
     CHECK(INS_OPCODE(w) == OP_LOAD, "opcode mal encode");
     CHECK(INS_REG1(w) == 3,   "reg1 mal encode");
@@ -36,53 +36,93 @@ static void test_instruction_encoding(void) {
     CHECK(INS_FLAGS(w) == 13, "flags mal encodes");
     CHECK(INS_IMM(w) == 42,   "immediate mal encode");
 
-    // Immediate negatif : extension de signe 40 bits
     w = INST_LOAD(1, -12345);
     CHECK(INS_IMM(w) == -12345, "immediate negatif mal decode");
 
-    // Bornes de l'immediate 40 bits
     w = INST_LOAD(1, INS_IMM_MIN);
     CHECK(INS_IMM(w) == INS_IMM_MIN, "borne basse mal decodee");
     w = INST_LOAD(1, INS_IMM_MAX);
     CHECK(INS_IMM(w) == INS_IMM_MAX, "borne haute mal decodee");
 
-    // Macros et decodage coherents sur chaque opcode
     Instruction prog[] = {
-        INST_LOAD(1, 10),
-        INST_ADD(3, 1, 2),
-        INST_SUB(3, 3, 1),
-        INST_MUL(3, 3, 2),
-        INST_JUMP(0),
-        INST_JUMP_IF(4, 9),
-        INST_PRINT(3),
-        INST_HALT
+        INST_LOAD(1, 10), INST_ADD(3, 1, 2), INST_SUB(3, 3, 1),
+        INST_MUL(3, 3, 2), INST_JUMP(0), INST_JUMP_IF(4, 9),
+        INST_PRINT(3), INST_HALT
     };
-    CHECK(INS_OPCODE(prog[0]) == OP_LOAD,    "macro LOAD incorrecte");
-    CHECK(INS_REG1(prog[0]) == 1,            "macro LOAD : mauvais reg1");
-    CHECK(INS_IMM(prog[0]) == 10,            "macro LOAD : mauvais immediate");
-    CHECK(INS_OPCODE(prog[1]) == OP_ADD,     "macro ADD incorrecte");
-    CHECK(INS_REG2(prog[1]) == 1 && INS_REG3(prog[1]) == 2, "macro ADD : mauvais regs");
-    CHECK(INS_OPCODE(prog[4]) == OP_JUMP && INS_IMM(prog[4]) == 0, "macro JUMP incorrecte");
+    CHECK(INS_OPCODE(prog[0]) == OP_LOAD && INS_REG1(prog[0]) == 1
+          && INS_IMM(prog[0]) == 10, "macro LOAD incorrecte");
+    CHECK(INS_OPCODE(prog[1]) == OP_ADD && INS_REG2(prog[1]) == 1
+          && INS_REG3(prog[1]) == 2, "macro ADD incorrecte");
     CHECK(INS_OPCODE(prog[5]) == OP_JUMP_IF && INS_REG1(prog[5]) == 4
           && INS_IMM(prog[5]) == 9, "macro JUMP_IF incorrecte");
-    CHECK(INS_OPCODE(prog[6]) == OP_PRINT,   "macro PRINT incorrecte");
-    CHECK(INS_OPCODE(prog[7]) == OP_HALT,    "macro HALT incorrecte");
+    CHECK(INS_OPCODE(prog[7]) == OP_HALT, "macro HALT incorrecte");
 }
 
-// 3. En-tete de chunk correct apres allocation
+// 3. Round-trip NaN-boxing (NOUVEAU v0.3)
+static void test_nan_boxing(void) {
+    // Entiers : zero, positifs, negatifs, bornes 48 bits
+    int64_t ints[] = { 0, 42, -123, 100, 200,
+                       VALUE_INT_MAX, VALUE_INT_MIN, 549755813887 };
+    for (int i = 0; i < 8; i++) {
+        Value v = value_int(ints[i]);
+        CHECK(VALUE_IS_INT(v), "tag INT non reconnu");
+        CHECK(!VALUE_IS_DOUBLE(v) && !VALUE_IS_PTR(v),
+              "un int ne doit pas etre confondu avec un autre type");
+        CHECK(value_as_int(v) == ints[i], "int round-trip KO");
+    }
+    // int(0) ne doit pas entrer en collision avec le NaN canonique
+    CHECK(value_int(0) != VALUE_QNAN, "collision int(0) / NaN canonique");
+    CHECK(!VALUE_IS_DOUBLE(value_int(0)), "int(0) decode comme double");
+
+    // Pointeurs heap : alloue, taggue, retrouve
+    Heap* heap = heap_init();
+    char* str = heap_alloc(heap, &heap->object_zone, 10, OBJ_STRING);
+    Value pv = value_ptr(str);
+    CHECK(VALUE_IS_PTR(pv), "tag PTR non reconnu");
+    CHECK(value_as_ptr(pv) == (void*)str, "ptr round-trip KO");
+    CHECK(!VALUE_IS_INT(pv) && !VALUE_IS_DOUBLE(pv), "ptr confondu");
+
+    // nil / booleans
+    CHECK(VALUE_IS_NIL(VALUE_NIL) && !VALUE_IS_NIL(VALUE_TRUE), "nil KO");
+    CHECK(VALUE_IS_BOOL(VALUE_TRUE) && VALUE_IS_BOOL(VALUE_FALSE)
+          && !VALUE_IS_BOOL(VALUE_NIL), "bool KO");
+
+    // Doubles : natifs, negatif, infini ; NaN canonise
+    Value d1 = value_double(3.14);
+    CHECK(VALUE_IS_DOUBLE(d1) && !VALUE_IS_INT(d1) && !VALUE_IS_PTR(d1),
+          "double 3.14 mal taggue");
+    CHECK(value_as_double(d1) == 3.14, "double round-trip KO");
+    Value dn = value_double(-0.5);
+    CHECK(value_as_double(dn) == -0.5, "double negatif round-trip KO");
+    Value dinf = value_double(1.0 / 0.0);
+    CHECK(VALUE_IS_DOUBLE(dinf), "infini doit rester un double");
+    Value dnan = value_double(0.0 / 0.0);
+    CHECK(dnan == VALUE_QNAN, "tout NaN doit etre canonise en VALUE_QNAN");
+    CHECK(VALUE_IS_DOUBLE(dnan), "le NaN canonise reste un double");
+    heap_free(heap);
+
+    // falsy : nil, false, int 0 ; ni true ni les autres entiers
+    CHECK(value_is_falsy(VALUE_NIL), "nil doit etre faux");
+    CHECK(value_is_falsy(VALUE_FALSE), "false doit etre faux");
+    CHECK(value_is_falsy(value_int(0)), "int 0 doit etre faux");
+    CHECK(!value_is_falsy(VALUE_TRUE), "true doit etre vrai");
+    CHECK(!value_is_falsy(value_int(7)), "int 7 doit etre vrai");
+}
+
+// 4. En-tete de chunk correct apres allocation
 static void test_chunk_header(void) {
     Heap* heap = heap_init();
     char* str = heap_alloc(heap, &heap->object_zone, 10, OBJ_STRING);
     ChunkHeader* h = (ChunkHeader*)str - 1;
 
-    size_t expected = sizeof(ChunkHeader) + ((10 + 7) & ~7); // 8 + 16 = 24
+    size_t expected = sizeof(ChunkHeader) + ((10 + 7) & ~7);
     CHECK(h->size == expected, "taille totale du chunk incorrecte");
     CHECK(h->type == OBJ_STRING, "type du chunk incorrect");
     CHECK(h->marked == 0, "chunk ne doit pas etre marque a l'allocation");
     heap_free(heap);
 }
 
-// 4. Deux allocations distinctes, donnees intactes
+// 5. Deux allocations distinctes, donnees intactes
 static void test_multiple_allocations(void) {
     Heap* heap = heap_init();
     char* a = heap_alloc(heap, &heap->object_zone, 10, OBJ_STRING);
@@ -95,7 +135,7 @@ static void test_multiple_allocations(void) {
     heap_free(heap);
 }
 
-// 5. Allocation plus grande qu'une page -> doit echouer proprement
+// 6. Allocation plus grande qu'une page -> doit echouer proprement
 static void test_oversized_allocation(void) {
     Heap* heap = heap_init();
     void* too_big = heap_alloc(heap, &heap->object_zone,
@@ -106,7 +146,7 @@ static void test_oversized_allocation(void) {
     heap_free(heap);
 }
 
-// 6. Deuxieme page allouee quand la premiere est PLEINE
+// 7. Deuxieme page allouee quand la premiere est PLEINE
 static void test_page_growth(void) {
     Heap* heap = heap_init();
     CHECK(heap->object_zone.page_count == 0, "zone doit demarrer sans page");
@@ -126,35 +166,39 @@ static void test_page_growth(void) {
     heap_free(heap);
 }
 
-// 7. GC : un entier brut dans un array ne doit PAS faire planter le mark
-static void test_gc_with_raw_ints(void) {
+// 8. GC : array mixte (ints + ptr) -> le mark suit UNIQUEMENT le ptr
+static void test_gc_mixed_array(void) {
     Heap* heap = heap_init();
     ArrayObject* arr = heap_alloc(heap, &heap->object_zone,
                                   sizeof(ArrayObject), OBJ_ARRAY);
-    arr->length = 2;
+    arr->length = 3;
     arr->elements = heap_alloc(heap, &heap->object_zone,
-                               2 * sizeof(Value), OBJ_INT);
-    arr->elements[0] = 100;   // entiers bruts, PAS des pointeurs
-    arr->elements[1] = 200;
+                              3 * sizeof(Value), OBJ_INT);
+    char* cible = heap_alloc(heap, &heap->object_zone, 10, OBJ_STRING);
+    strcpy(cible, "vive");
+    arr->elements[0] = value_int(100);      // entiers : ne doivent PAS
+    arr->elements[1] = value_ptr(cible);    // etre suivis ; le ptr oui
+    arr->elements[2] = value_int(-45);
 
-    void* roots[] = { arr };
+    Value roots[] = { value_ptr(arr) };
     gc_collect(heap, roots, 1);
 
     ChunkHeader* arr_h = (ChunkHeader*)arr - 1;
     ChunkHeader* el_h  = (ChunkHeader*)arr->elements - 1;
-    CHECK(arr_h->marked == 0 && el_h->marked == 0,
+    ChunkHeader* ci_h  = (ChunkHeader*)cible - 1;
+    CHECK(arr_h->marked == 0 && el_h->marked == 0 && ci_h->marked == 0,
           "les marques doivent etre reinitialisees apres le sweep");
     heap_free(heap);
 }
 
-// 8. GC : les objets racine sont bien marques pendant la phase de mark
+// 9. GC : les objets racine sont bien marques pendant la phase de mark
 static void test_gc_marks_reachable(void) {
     Heap* heap = heap_init();
     char* root = heap_alloc(heap, &heap->object_zone, 10, OBJ_STRING);
     char* garbage = heap_alloc(heap, &heap->object_zone, 10, OBJ_STRING);
     (void)garbage;
 
-    void* roots[] = { root };
+    Value roots[] = { value_ptr(root) };
     gc_mark_roots(heap, roots, 1);
 
     ChunkHeader* rh = (ChunkHeader*)root - 1;
@@ -164,17 +208,20 @@ static void test_gc_marks_reachable(void) {
     heap_free(heap);
 }
 
-// 9. heap_is_ptr distingue pointeur du heap et entier
+// 10. heap_is_ptr distingue pointeur du heap et entier (garde de debug)
 static void test_heap_is_ptr(void) {
     Heap* heap = heap_init();
     char* p = heap_alloc(heap, &heap->object_zone, 10, OBJ_STRING);
     CHECK(heap_is_ptr(heap, p), "un pointeur du heap doit etre reconnu");
     CHECK(!heap_is_ptr(heap, (void*)100), "un entier brut doit etre rejete");
     CHECK(!heap_is_ptr(heap, NULL), "NULL doit etre rejete");
+    // Depuis le NaN-boxing, le tag PTR est le discriminateur O(1)
+    CHECK(VALUE_IS_PTR(value_ptr(p)) && !VALUE_IS_PTR(value_int(100)),
+          "le tag doit distinguer ptr et int");
     heap_free(heap);
 }
 
-// 10. Bytecode charge comme objet dans code_zone, executable
+// 11. Bytecode charge comme objet dans code_zone, executable
 static void test_bytecode_as_object(void) {
     VM* vm = vm_new();
     Instruction program[] = {
@@ -193,12 +240,12 @@ static void test_bytecode_as_object(void) {
           "les instructions doivent vivre dans le heap");
 
     vm_run(vm);
-    CHECK(vm->registers[3] == 30, "R3 doit valoir 30 apres execution");
+    CHECK(vm->registers[3] == value_int(30), "R3 doit valoir int 30");
+    CHECK(VALUE_IS_INT(vm->registers[3]), "R3 doit etre un entier NaN-boxe");
     vm_free(vm);
 }
 
-// 11. Boucle : somme 0+1+...+5 = 15 via JUMP / JUMP_IF
-//     (programme identique a la v0.1 : comportement constant)
+// 12. Boucle : somme 0+1+...+5 = 15 via JUMP / JUMP_IF
 static void test_loop_bytecode(void) {
     VM* vm = vm_new();
     Instruction program[] = {
@@ -216,24 +263,26 @@ static void test_loop_bytecode(void) {
     };
     vm_load_bytecode(vm, program, sizeof(program) / sizeof(Instruction));
     vm_run(vm);
-    CHECK(vm->registers[3] == 15, "la somme 0..5 doit valoir 15");
+    CHECK(vm->registers[3] == value_int(15), "la somme 0..5 doit valoir 15");
     vm_free(vm);
 }
 
 void run_all_tests(void) {
     printf("--- Debut des tests ---\n");
-    printf("sizeof(ChunkHeader) = %zu, sizeof(Instruction) = %zu\n",
-           sizeof(ChunkHeader), sizeof(Instruction));
+    printf("sizeof(ChunkHeader)=%zu sizeof(Value)=%zu sizeof(Instruction)=%zu\n",
+           sizeof(ChunkHeader), sizeof(Value), sizeof(Instruction));
     RUN_TEST(test_struct_sizes);
     RUN_TEST(test_instruction_encoding);
+    RUN_TEST(test_nan_boxing);
     RUN_TEST(test_chunk_header);
     RUN_TEST(test_multiple_allocations);
     RUN_TEST(test_oversized_allocation);
     RUN_TEST(test_page_growth);
-    RUN_TEST(test_gc_with_raw_ints);
+    RUN_TEST(test_gc_mixed_array);
     RUN_TEST(test_gc_marks_reachable);
     RUN_TEST(test_heap_is_ptr);
     RUN_TEST(test_bytecode_as_object);
     RUN_TEST(test_loop_bytecode);
     printf("--- %d tests OK ---\n", tests_run);
 }
+

@@ -21,7 +21,7 @@
 
 typedef uint8_t ObjectType;
 
-// Objet Array : elements = valeurs 64 bits (int OU pointeur NaN-boxe)
+// Objet Array : elements = Value NaN-boxes (int, ptr, nil, bool, double)
 typedef struct {
     int64_t  length;
     Value*   elements;
@@ -64,13 +64,15 @@ void   heap_free(Heap* heap);
 // Alloue un chunk. Retourne NULL si size > PAGE_SIZE - sizeof(ChunkHeader).
 void*  heap_alloc(Heap* heap, MemoryZone* zone, size_t size, ObjectType type);
 
-// Verifie qu'un pointeur est bien une donnee allouee dans le heap.
+// Verifie qu'un pointeur brut est une donnee du heap.
+// Plus utilise par le GC depuis le NaN-boxing (garde pour les tests/debug).
 bool   heap_is_ptr(const Heap* heap, const void* ptr);
 
-// GC mark-and-sweep
-void   gc_mark(Heap* heap, void* ptr);
-void   gc_mark_roots(Heap* heap, void** roots, size_t root_count);
+// GC mark-and-sweep : les valeurs sont des Value NaN-boxes,
+// seuls les TAG_PTR sont suivis (test O(1), plus de garde-fou O(chunks)).
+void   gc_mark(Heap* heap, Value v);
+void   gc_mark_roots(Heap* heap, const Value* roots, size_t root_count);
 void   gc_sweep(Heap* heap);
-void   gc_collect(Heap* heap, void** roots, size_t root_count);
+void   gc_collect(Heap* heap, const Value* roots, size_t root_count);
 
 #endif

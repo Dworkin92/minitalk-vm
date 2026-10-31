@@ -7,6 +7,8 @@
 
 ## Réalisé (état courant)
 
+**v0.3 — NaN-boxing des valeurs, 12 tests OK** *(validé sur MinGW le 31/10/2026 ; `Value` = 64 bits taggués, GC à test de tag O(1))*
+
 **v0.2 — encodage compact 64 bits, 11 tests OK** *(validé sur MinGW le 31/10/2026, compilation sans warning du premier coup ; code publié sur GitHub : `Dworkin92/minitalk-vm`)*
 
 **v0.1 — VM minimale fonctionnelle, 10 tests OK** *(code publié sur GitHub : `Dworkin92/minitalk-vm`)*
@@ -22,6 +24,22 @@
 ---
 
 ## Historique
+
+### Samedi 31 octobre 2026 — séance 3 (v0.3 : NaN-boxing)
+
+- **Chantier 2 réalisé : NaN-boxing des valeurs** (`value.h`, nouveau fichier — le projet passe à 11 fichiers) :
+  - `Value` = `uint64_t` : les **doubles** vivent dans leurs bits natifs IEEE 754 ; int 48 bits signés, pointeur heap, nil, true, false vivent dans l'espace **quiet NaN** (tag sur 3 bits en 50..48, payload 48 bits) ;
+  - `gc_mark` prend un `Value` et ne suit que les `TAG_PTR` : **test O(1)** — le garde-fou `heap_is_ptr` (D5) quitte le chemin du GC (conservé pour tests/debug) ;
+  - `gc_mark_roots`/`gc_collect` prennent des tableaux de `Value` (`value_ptr(...)` pour les racines) ;
+  - registres VM = `Value` taggués ; `JUMP_IF` saute sur nil/false/int 0 (`value_is_falsy`) ; `PRINT` affiche selon le type ; programmes v0.2 inchangés ;
+  - tests remaniés (racines en `Value`, array mixte int+ptr) + **nouveau test 3 `test_nan_boxing`** : round-trips int/ptr/double/nil/bool, bornes ±2^47, NaN canonisé, infini, falsy → **12 tests au total**.
+- **Validation par simulation JS** — deux cas limites attrapés avant l'écriture du C :
+  1. **les infinis** (`0x7FF0000000000000`, exposant 0x7FF + mantisse nulle) tombaient à tort dans l'espace taggué → clause « mantisse nulle = double » ajoutée au test de type ;
+  2. vérification qu'aucune collision `int(0)`/NaN canonique n'existe (résolue par des tags commençant à 1, jamais 0).
+  - Aussi validés : canonisation de tout NaN en `VALUE_QNAN`, rejet des pointeurs ≥ 2^48, extension de signe 48 bits (même formule portable que v0.2), GC qui marque uniquement le ptr d'un array mixte, boucle VM = 15 avec registres taggués.
+- **Correction post-livraison (copier/coller)** : premiers essais de compilation côté Jean-Marc en échec — le canvas source est intègre (vérifié octet par octet), ce sont les **rétro-lignes des macros multi-lignes** (`CHECK`, `VALUE_IS_DOUBLE`) et une longue ligne de macro (`INS_IMM`) qui ont été abîmées à la copie dans l'éditeur. Durcissement définitif : toutes les macros multi-lignes remplacées par des **fonctions `static inline`** (`check_fail` + alias `CHECK` mono-ligne, `value_is_double/int/ptr` + alias courts, `ins_imm` + alias `INS_IMM`) → le code n'a plus **aucune** rétro-ligne fragile. Leçon consignée : zéro macro multi-lignes dans ce projet (la console/copie Windows de Jean-Marc n'est pas fiable pour elles).
+- Code complet livré dans le canvas **« myVM v0.3 – NaN-boxing des valeurs »** (version durcie). Cahier : §4.5 ajouté (« écrit, en attente de validation »), tableaux fichiers/objectifs mis à jour.
+- **À faire côté Jean-Marc** : ✅ **fait** — après recopie de la version durcie : compilation MinGW propre, **12/12 tests OK**, `sizeof(Value) = 8`, démo `Affichage type : 42 3.5 nil true`, array mixte `[100, ptr, 200]` GC-sans-crash. Commit v0.3 + push à effectuer.
 
 ### Samedi 31 octobre 2026 — séance 2 (v0.2 : encodage compact)
 
@@ -105,4 +123,4 @@
 
 ---
 
-*Mise à jour suivante : session encodage compact 64 bits (v0.2).*
+*Mise à jour suivante : validation v0.3 (NaN-boxing), puis chantier 3 : sweep réel / free-list.*

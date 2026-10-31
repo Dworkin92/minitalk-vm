@@ -9,8 +9,6 @@
 #include <stdlib.h>
 
 // ---- Assembleur : encodage d'une instruction compacte ----
-// Valide les bornes (opcode, registres 0..15, flags, immediate 40 bits)
-// et retourne le mot de 64 bits.
 
 static inline Instruction ins_encode(uint8_t op, uint8_t r1, uint8_t r2,
                                      uint8_t r3, uint8_t flags, int64_t imm) {
@@ -42,8 +40,6 @@ static inline Instruction ins_encode(uint8_t op, uint8_t r1, uint8_t r2,
     return word;
 }
 
-// Macros assembleuses : memes signatures qu'en v0.1, les programmes
-// de test et de demo sont inchanges.
 #define INST_LOAD(dst, imm)      ins_encode(OP_LOAD,   (dst), 0,    0,    0, (imm))
 #define INST_ADD(dst, a, b)      ins_encode(OP_ADD,    (dst), (a),   (b),  0, 0)
 #define INST_SUB(dst, a, b)      ins_encode(OP_SUB,    (dst), (a),   (b),  0, 0)
@@ -53,12 +49,14 @@ static inline Instruction ins_encode(uint8_t op, uint8_t r1, uint8_t r2,
 #define INST_PRINT(reg)          ins_encode(OP_PRINT,  (reg), 0,    0,    0, 0)
 #define INST_HALT                ins_encode(OP_HALT,  0,     0,    0,    0, 0)
 
-#define CHECK(cond, msg)                                                   \
-    do {                                                                   \
-        if (!(cond)) {                                                     \
-            fprintf(stderr, "[ECHEC] %s -- %s:%d\n", msg, __FILE__, __LINE__); \
-            exit(1);                                                       \
-        }                                                                  \
-    } while (0)
+// ---- Verification : FONCTION (pas de macro multi-ligne, insensible
+//      aux copies/collers qui abiment les retro-lignes) ----
+
+static inline void check_fail(const char* msg, const char* file, int line) {
+    fprintf(stderr, "[ECHEC] %s -- %s:%d\n", msg, file, line);
+    exit(1);
+}
+
+#define CHECK(cond, msg) ((cond) ? (void)0 : check_fail((msg), __FILE__, __LINE__))
 
 #endif

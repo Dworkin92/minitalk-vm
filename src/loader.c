@@ -5,12 +5,10 @@
 #include "memory.h"
 #include <stdio.h>
 #include <string.h>
-#include <stdlib.h>
 
 // Le bytecode vit entierement dans code_zone (zone dediee du heap) :
 //  - un chunk CodeObject (metadonnees)
-//  - un chunk pour le tableau d'instructions
-// Aucun malloc() hors heap : liberation unique via heap_free().
+//  - un chunk pour le tableau d'instructions (8 octets chacune)
 
 void vm_load_bytecode(VM* vm, const Instruction* bytecode, size_t size) {
     CodeObject* co = (CodeObject*)heap_alloc(

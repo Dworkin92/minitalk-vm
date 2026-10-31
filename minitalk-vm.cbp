@@ -32,6 +32,7 @@
 		</Unit>
 		<Unit filename="src/types.h" />
 		<Unit filename="src/utils.h" />
+		<Unit filename="src/value.h" />
 		<Unit filename="src/vm.c">
 			<Option compilerVar="CC" />
 		</Unit>

@@ -43,11 +43,6 @@ Heap* heap_init(void) {
 }
 
 // ---- Allocation ----
-// Contrat :
-//  - tailles arrondies a 8 octets (alignement)
-//  - header->size = taille TOTALE (header + donnees)
-//  - le chunk suivant demarre a (header + header->size) : toujours aligne
-//  - retourne NULL si la demande ne tient pas dans une page
 
 void* heap_alloc(Heap* heap, MemoryZone* zone, size_t size, ObjectType type) {
     (void)heap; // reserve pour un futur suivi statistique
@@ -94,7 +89,7 @@ void heap_free(Heap* heap) {
     free(heap);
 }
 
-// ---- heap_is_ptr : le garde-fou du GC ----
+// ---- heap_is_ptr : garde de debug/tests (le GC ne l'utilise plus) ----
 
 static bool zone_contains(const MemoryZone* zone, const void* ptr) {
     for (uint32_t i = 0; i < zone->page_count; i++) {
@@ -121,25 +116,26 @@ bool heap_is_ptr(const Heap* heap, const void* ptr) {
 }
 
 // ---- GC mark-and-sweep ----
+// v0.3 : gc_mark prend un Value NaN-boxe. Le test de pointeur est
+// O(1) (test de tag) : plus besoin du garde-fou heap_is_ptr dans le
+// parcours, et plus de risque de dereferencer un entier brut.
 
-void gc_mark(Heap* heap, void* ptr) {
-    if (ptr == NULL) return;
-    if (!heap_is_ptr(heap, ptr)) return;
+void gc_mark(Heap* heap, Value v) {
+    if (!VALUE_IS_PTR(v)) return;          // <-- O(1), remplace D5
 
+    void* ptr = value_as_ptr(v);
     ChunkHeader* h = (ChunkHeader*)ptr - 1;
     if (h->marked) return;
     h->marked = 1;
 
     if (h->type == OBJ_ARRAY) {
         ArrayObject* arr = (ArrayObject*)ptr;
-        for (int64_t i = 0; i < arr->length; i++) {
-            if (heap_is_ptr(heap, arr->elements))
-                gc_mark(heap, arr->elements);
-        }
+        for (int64_t i = 0; i < arr->length; i++)
+            gc_mark(heap, arr->elements[i]);   // seuls les TAG_PTR descendent
     }
 }
 
-void gc_mark_roots(Heap* heap, void** roots, size_t root_count) {
+void gc_mark_roots(Heap* heap, const Value* roots, size_t root_count) {
     for (size_t i = 0; i < root_count; i++)
         gc_mark(heap, roots[i]);
 }
@@ -159,7 +155,7 @@ void gc_sweep(Heap* heap) {
     }
 }
 
-void gc_collect(Heap* heap, void** roots, size_t root_count) {
+void gc_collect(Heap* heap, const Value* roots, size_t root_count) {
     gc_mark_roots(heap, roots, root_count);
     gc_sweep(heap);
 }

@@ -11,7 +11,7 @@
 | Instructions **fixes**, taille déterministe | ✅ 16 octets                                     | idem d'abord, puis **encodage compact 64 bits** (révision D2)                                        |
 | Pages mémoire de **16 Mo**                  | ✅                                               | inchangé                                                                                             |
 | **Registres**                               | ✅ 32 registres universels                       | ⬜ remplacés par **fenêtre de 16 slots** par appel (opérande 4 bits) + `LOAD_EXT`/`STORE_EXT` au-delà |
-| Value 64 bits avec **NaN-boxing**           | ⬜ à faire (`int64_t` brut pour l'instant)       | inchangé                                                                                             |
+| Value 64 bits avec **NaN-boxing**           | ✅ v0.3 (31/10/2026, 12/12 tests)                | inchangé                                                                                             |
 | Objets alloués dans le **heap**             | ✅ (chunks dans des pages)                       | inchangé                                                                                             |
 | **Constant pool**                           | ⬜ zone réservée (`constant_zone`), pas d'opcode | inchangé                                                                                             |
 | Modèle d'exécution                          | ✅ registres simples (noyau de base)             | ⬜ **hybride pile/registres inspiré de Lua 5** (fenêtre de registres, §10)                            |
@@ -28,13 +28,13 @@
 │                                    └─► Instruction[] (code_zone) |
 └──────────────────────────┬───────────────────────────────────────┘
                            │
-                    ┌──────▼────-──┐
+                    ┌──────▼───────┐
                     │    Heap      │
-                    ├─────────-────┤
+                    ├──────────────┤
                     │ object_zone  │  objets dynamiques (strings, arrays…)
                     │ constant_zone│ constantes (réservée)
                     │ code_zone    │  CodeObject + bytecode
-                    └──────┬────-──┘
+                    └──────┬───────┘
               chaque zone : pages[1024] → MemoryPage (16 Mo)
               chaque page : chunks contigus [ChunkHeader | données]
 ```
@@ -46,12 +46,13 @@
 
 | Fichier      | Rôle                                                        |
 | ------------ | ----------------------------------------------------------- |
-| `types.h`    | `Value`, `Instruction` (16 o), opcodes (`#define`)          |
+| `value.h`    | `Value` NaN-boxé : encodeurs/décodeurs, tests de tag O(1)   |
+| `types.h`    | `Instruction` (8 o), opcodes (`#define`), registres         |
 | `memory.h/c` | Heap, zones, pages, chunks, `heap_alloc`, `heap_is_ptr`, GC |
 | `vm.h/c`     | Structure `VM`, boucle d'exécution                          |
 | `loader.h/c` | Chargement du bytecode en `CodeObject` (dans le heap)       |
 | `utils.h`    | Macros `INST_*`, `CHECK`                                    |
-| `test.c`     | 10 tests (`run_all_tests()`, appelé par `main`)             |
+| `test.c`     | 12 tests (`run_all_tests()`, appelé par `main`)             |
 | `main.c`     | Seul point d'entrée                                         |
 
 
@@ -130,6 +131,29 @@ typedef struct { int64_t length; Value* elements; } ArrayObject;
 typedef struct { size_t length; Instruction* code; } CodeObject;
 ```
 
+### 4.5 Value NaN-boxé — 8 octets (v0.3, validée le 31/10/2026 : 12/12 tests, MinGW)
+
+```c
+typedef uint64_t Value;
+// doubles : bits natifs IEEE 754 ; taggés : espace quiet NaN
+//   bits 50..48 = tag, bits 47..0 = payload (48 bits)
+//   TAG 1 = INT (signé 48 bits, ±2^47), TAG 2 = PTR (heap, < 2^48),
+//   TAG 3 = NIL, TAG 4 = TRUE, TAG 5 = FALSE
+#define VALUE_IS_DOUBLE(v) ((((v) & VALUE_EXP) != VALUE_EXP) \
+    || (((v) & VALUE_MANT) == 0) || (v) == VALUE_QNAN)
+#define VALUE_IS_PTR(v)   (!VALUE_IS_DOUBLE(v) && VALUE_TAG(v) == VALUE_TAG_PTR)
+```
+
+**Points de design** (remplace D5 dans le chemin du GC) :
+
+- Un mot est un **double** si exposant ≠ 0x7FF, **ou** mantisse nulle (±infini !), **ou** NaN canonique `VALUE_QNAN`. *Cas limite attrapé par la simulation : sans la clause mantisse nulle, `+inf` était classé taggué.*
+- Les tags commencent à **1** (jamais 0) : `value_int(0)` = `QNAN | 1<<48` ≠ `QNAN`, pas de collision avec le NaN canonique.
+- Tout `double` NaN est **canonisé** en `VALUE_QNAN` à l'encodage (sinon ses bits ressembleraient à un tag).
+- Entiers signés **48 bits** (±140 737 milliards), extension de signe portable `(p ^ S) - S`.
+- `value_ptr` vérifie l'adresse &lt; 2^48 (vrai pour l'espace utilisateur x64).
+- `gc_mark` prend un `Value` et ne suit que les `TAG_PTR` : **test O(1)**, le garde-fou `heap_is_ptr` quitte le chemin du GC (reste pour tests/debug).
+- `JUMP_IF` saute sur nil / false / int 0 (`value_is_falsy`) ; `PRINT` affiche selon le type.
+
 ## 5. Modèle mémoire
 
 ### 5.1 Zones
@@ -146,10 +170,10 @@ Chaque zone est un **tableau de 1024 pointeurs de pages** (`pages[1024]`), allou
 
 ### 5.3 GC mark-and-sweep
 
-- **Racines** : passées explicitement (`gc_collect(heap, roots, n)`). À terme : registres VM + pile.
-- **`gc_mark`** : ne suit un pointeur **que si `heap_is_ptr()` confirme** qu'il pointe dans les données d'un chunk du heap. C'est le garde-fou qui distingue entiers bruts et pointeurs **en attendant le NaN-boxing** (il supprimera les faux positifs du genre `data[i] = 100` traité comme un pointeur — cause du `0xC0000005` historique).
+- **Racines** : passées explicitement (`gc_collect(heap, roots, n)`, racines = `Value` NaN-boxés). À terme : pile d'exécution.
+- **`gc_mark`** (v0.3) : prend un `Value` et ne suit **que les `TAG_PTR`** — test de tag **O(1)**, sans parcours du heap. Le garde-fou `heap_is_ptr` (D5) est retiré du chemin du GC (conservé pour tests/debug).
 - **`gc_sweep`** : parcourt les chunks (`h += h->size`), remet `marked` à 0. ⚠️ Le sweep **ne libère pas encore** réellement : la mémoire n'est pas réutilisée (free-list à venir).
-- Coût actuel : `heap_is_ptr` est O(chunks de la page) — acceptable pour valider, à remplacer par le NaN-boxing.
+- Typage des valeurs : aucun coût résiduel — le discriminateur entiers/pointeurs est un simple test de bits (leçon du `0xC0000005` réglée à la racine).
 
 ## 6. Bytecode comme objet
 
@@ -169,7 +193,7 @@ Aucun `malloc` hors heap pour le code : libération unique via `heap_free()`. La
 | D2  | `Instruction` = 16 o explicites (`flags` + `pad`)                                               | struct avec `int64_t` ⇒ multiple de 8 inévitable ; autant l'expliciter                                                                                                                                                                                                                                 |
 | D3  | `ChunkHeader.size` = taille **totale**                                                          | parcours GC trivial, pas de recalcul                                                                                                                                                                                                                                                                   |
 | D4  | Tableau de pages plutôt que liste chaînée                                                       | O(1), borné, adapté au sweep. **Croissance par doublement** (31/10/2026) : le tableau devient `pages*` + `max_pages` (1024 au départ) ; à saturation, realloc ×2 et copie des pointeurs (coût : 8 Ko→16 Ko de pointeurs, microsecondes, les pages elles-mêmes ne bougent pas → aucun `Value` invalidé) |
-| D5  | `heap_is_ptr` garde-fou du GC                                                                   | protège contre entiers bruts tant que pas de NaN-boxing                                                                                                                                                                                                                                                |
+| D5  | `heap_is_ptr` garde-fou du GC                                                                   | protège contre entiers bruts tant que pas de NaN-boxing. **v0.3** : remplacé dans le chemin du GC par le test de tag O(1) ; conservé pour tests/debug                                                                                                                                                  |
 | D6  | Gros objets = **chunks multi-pages** (révisée le 31/10/2026)                                    | une allocation &gt; page occupe *n* slots consécutifs de la table de pages ; l'accès aux données passe par un adressage via la table (`big_chunk_addr`, O(1)) — aucune contiguïté d'adresse requise. Voir §11                                                                                          |
 | D7  | Bytecode = objets dans `code_zone`                                                              | cohérence "tout est objet", métadonnées futures, libération unique                                                                                                                                                                                                                                     |
 | D8  | **(décidée le 28/10/2026, non encore implémentée)** Fenêtre de registres à la Lua + CALL/RETURN | chaque fonction reçoit sa propre fenêtre de slots dans une pile d'exécution unique ; allocation de registres triviale (pile LIFO de slots, pas de coloration) ; fusionne le chantier CALL/RETURN + frames. Voir §10.                                                                                   |
@@ -184,10 +208,8 @@ Aucun `malloc` hors heap pour le code : libération unique via `heap_free()`. La
 ## 8. Limitations connues (v0.1)
 
 - Sweep non destructif : pas de réutilisation mémoire (free-list à implémenter).
-- `heap_is_ptr` coûteux (disparaîtra avec le NaN-boxing).
 - Pas de `CALL`/`RETURN`, pas de pile de frames *(→ chantier D8, §10)*.
-- `ArrayObject.elements` sont des `Value` brutes (int ou pointeur, indiscernables).
-- Pas de flottants, pas de constant pool actif, pas de dispatch dynamique.
+- Pas de constant pool actif, pas de dispatch dynamique, pas d'opérations sur les doubles dans le bytecode.
 
 ## 9. Feuille de route (ordre logique, révisé le 31/10/2026)
 
@@ -271,4 +293,3 @@ uint8_t* big_chunk_addr(Zone* z, uint32_t first, size_t off) {
 - À traiter au codage : `heap_is_ptr` doit reconnaître les pointeurs tombant dans une page dédiée à un gros chunk (recherche binaire sur les bases de pages triées + identification des pages dédiées).
 
 **Croissance de la table** (D4) : `pages*` + `max_pages` (1024 au départ), doublement à saturation — realloc et copie de pointeurs uniquement, les pages ne bougent pas, aucun `Value` invalidé.
-
